@@ -1,0 +1,55 @@
+[
+  {
+    "mode": "normal",
+    "results": [
+      {
+        "trial": 1,
+        "mode": "normal",
+        "timesteps": 10000,
+        "eval_episodes": 5,
+        "mean_reward": 0.273,
+        "params": {
+          "learning_rate": 0.0001,
+          "ent_coef": 0.005,
+          "gamma": 0.99
+        }
+      },
+      {
+        "trial": 2,
+        "mode": "normal",
+        "timesteps": 10000,
+        "eval_episodes": 5,
+        "mean_reward": 0.273,
+        "params": {
+          "learning_rate": 0.0003,
+          "ent_coef": 0.01,
+          "gamma": 0.99
+        }
+      },
+      {
+        "trial": 3,
+        "mode": "normal",
+        "timesteps": 10000,
+        "eval_episodes": 5,
+        "mean_reward": 2.223,
+        "params": {
+          "learning_rate": 0.001,
+          "ent_coef": 0.02,
+          "gamma": 0.98
+        }
+      }
+    ],
+    "best": {
+      "trial": 3,
+      "mode": "normal",
+      "timesteps": 10000,
+      "eval_episodes": 5,
+      "mean_reward": 2.223,
+      "params": {
+        "learning_rate": 0.001,
+        "ent_coef": 0.02,
+        "gamma": 0.98
+      }
+    }
+  }
+]

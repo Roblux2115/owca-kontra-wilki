@@ -1,0 +1,8 @@
+pygame
+gymnasium
+numpy
+stable-baselines3
+fastapi
+pydantic
+uvicorn
+redis

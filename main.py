@@ -1,21 +1,14 @@
-"""
-Owca Kontra Wilki – Mini Isaac-like
-Wymagania: pip install pygame
-Struktura:
-    main.py
-    sprites/  (player, enemy, enemy_shooter, enemy_boss, enemy_bullet,
-               tree_s/m/l, ammo, bullet, gate, fence, grass)
-"""
+
 import pygame, random, math, os, json
 
 pygame.init()
+pygame.joystick.init()
 
 WIDTH, HEIGHT = 600, 400
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
+screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.FULLSCREEN | pygame.SCALED)
 pygame.display.set_caption("Owca Kontra Wilki")
 clock = pygame.time.Clock()
 
-# ─── SPRITE'Y ────────────────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SPR_DIR  = os.path.join(BASE_DIR, "sprites")
 
@@ -46,11 +39,48 @@ def draw_fence():
         screen.blit(fence_v, (0, ty))
         screen.blit(fence_v, (WIDTH - FVW, ty))
 
-# ─── STAŁE ───────────────────────────────────────────────────────────────────
+def draw_health_ui(hp):
+    hp = max(0, min(3, hp))
+    label = font.render(f"HP: {hp}/3", True, (120, 35, 45))
+    screen.blit(label, (BORDER+5, BORDER+5))
+
+    for i in range(3):
+        x = BORDER + 72 + i * 18
+        y = BORDER + 8
+        color = (220, 60, 80) if i < hp else (120, 115, 110)
+        pygame.draw.circle(screen, color, (x + 4, y + 4), 4)
+        pygame.draw.circle(screen, color, (x + 10, y + 4), 4)
+        pygame.draw.polygon(screen, color, [(x, y + 6), (x + 14, y + 6), (x + 7, y + 15)])
+        pygame.draw.polygon(screen, (80, 45, 45), [(x, y + 6), (x + 14, y + 6), (x + 7, y + 15)], 1)
+
 BORDER          = 22
 IFRAME_DURATION = 60   # klatki nietykalności po trafieniu
+JOY_DEADZONE    = 0.35
 
-# ─── KLASY WROGÓW ────────────────────────────────────────────────────────────
+
+def init_joystick():
+    if pygame.joystick.get_count() == 0:
+        return None
+    pad = pygame.joystick.Joystick(0)
+    pad.init()
+    print(f"Pad wykryty: {pad.get_name()}")
+    return pad
+
+
+joystick = init_joystick()
+
+
+def joy_axis(pad, axis):
+    if not pad or pad.get_numaxes() <= axis:
+        return 0.0
+    value = pad.get_axis(axis)
+    return value if abs(value) >= JOY_DEADZONE else 0.0
+
+
+def joy_button(pad, button):
+    return bool(pad and pad.get_numbuttons() > button and pad.get_button(button))
+
+
 
 class Enemy:
     KIND   = "normal"
@@ -206,7 +236,7 @@ class EnemyBullet:
         surface.blit(spr["enemy_bullet"], (int(self.x)-4, int(self.y)-4))
 
 
-# ─── GENERATOR MAPY ──────────────────────────────────────────────────────────
+#GENERATOR MAPY
 PROTECTED_ZONES = [
     pygame.Rect(28, 28, 100, 100),
     pygame.Rect(WIDTH-110, HEIGHT//2-55, 100, 100),
@@ -238,7 +268,7 @@ def check_path(obs_rects):
                 visited.add((nx,ny)); q.append((nx,ny))
     return False
 
-# ─── ZMIENNE GLOBALNE ────────────────────────────────────────────────────────
+#ZMIENNE GLOBALNE
 player_pos    = [50, 50]
 player_hp     = 3
 player_invuln = 0
@@ -256,10 +286,13 @@ level          = 0
 
 font     = pygame.font.SysFont(None, 26)
 font_big = pygame.font.SysFont(None, 48)
+font_menu = pygame.font.SysFont(None, 34)
 
-LEVEL_JSON   = os.path.join(BASE_DIR, 'ai_levels.json')
+LEVEL_JSON      = os.path.join(BASE_DIR, 'ai_levels.json')
+BOSS_LEVEL_JSON = os.path.join(BASE_DIR, 'boss_levels.json')
 ai_mode      = False   # True = poziomy od agenta AI, False = losowe
 ai_level_idx = 0       # który poziom z listy wczytać następny
+boss_level_idx = 0
 
 
 def load_ai_level():
@@ -280,7 +313,6 @@ def load_ai_level():
         generate_map()
         return
 
-    # Wybierz poziom cyklicznie
     data = all_levels[ai_level_idx % len(all_levels)]
     ai_level_idx += 1
 
@@ -309,6 +341,55 @@ def load_ai_level():
         ammo_rect = pygame.Rect(a["x"] - 11, a["y"] - 11, 22, 22)
     else:
         ammo_rect = pygame.Rect(WIDTH//2-11, HEIGHT//2-11, 22, 22)
+
+
+def load_ai_boss_level():
+    global obstacles, player_pos, enemies, ammo_rect
+    global player_bullets, enemy_bullets, has_ammo, door_rect, level, boss_level_idx
+
+    if not os.path.exists(BOSS_LEVEL_JSON):
+        print("Brak boss_levels.json - uruchom play_trained_boss.py zeby wygenerowac areny")
+        generate_map()
+        return
+
+    with open(BOSS_LEVEL_JSON) as f:
+        all_levels = json.load(f)
+
+    if not all_levels:
+        print("boss_levels.json jest pusty - przelaczam na losowego bossa")
+        generate_map()
+        return
+
+    data = all_levels[boss_level_idx % len(all_levels)]
+    boss_level_idx += 1
+
+    level += 1
+    obstacles = []; player_bullets = []; enemy_bullets = []
+    has_ammo = False; enemies = []; door_rect = None
+    player_pos[:] = [50, 50]
+
+    total = len(all_levels)
+    idx = (boss_level_idx - 1) % total + 1
+    print(f"Wczytuje poziom BOSS AI {idx}/{total}")
+
+    for o in data.get("obstacles", []):
+        r = pygame.Rect(o["x"], o["y"], o["w"], o["h"])
+        obstacles.append((r, random.choice(TREE_SPRITES)))
+
+    enemies.append(BossEnemy())
+
+    if data.get("ammo"):
+        a = data["ammo"]
+        ammo_rect = pygame.Rect(a["x"] - 11, a["y"] - 11, 22, 22)
+    else:
+        ammo_rect = pygame.Rect(WIDTH//2-11, HEIGHT//2-11, 22, 22)
+
+
+def load_next_ai_level():
+    if (level + 1) % 5 == 0:
+        load_ai_boss_level()
+    else:
+        load_ai_level()
 
 
 def generate_map():
@@ -370,26 +451,88 @@ def generate_map():
 generate_map()
 level = 0
 
-# ─── PĘTLA GRY ───────────────────────────────────────────────────────────────
+#PĘTLA GRY
 running = True
+paused = False
+resume_btn = pygame.Rect(WIDTH//2 - 90, HEIGHT//2 - 25, 180, 42)
+quit_btn = pygame.Rect(WIDTH//2 - 90, HEIGHT//2 + 30, 180, 42)
 while running:
 
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
-        if event.type == pygame.KEYDOWN and event.key == pygame.K_TAB:
-            ai_mode = not ai_mode
-            mode_name = 'AI' if ai_mode else 'LOSOWY'
-            print(f'Tryb poziomów: {mode_name}')
+        if event.type == pygame.JOYDEVICEADDED:
+            joystick = init_joystick()
+        if event.type == pygame.JOYDEVICEREMOVED:
+            joystick = init_joystick()
+        if event.type == pygame.JOYBUTTONDOWN:
+            if event.button in (7, 9):
+                paused = not paused
+            elif paused and event.button == 0:
+                paused = False
+            elif paused and event.button in (1, 6):
+                running = False
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                paused = not paused
+            elif paused and event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                paused = False
+            elif paused and event.key == pygame.K_q:
+                running = False
+            elif not paused and event.key == pygame.K_TAB:
+                ai_mode = not ai_mode
+                mode_name = 'AI' if ai_mode else 'LOSOWY'
+                print(f'Tryb poziomów: {mode_name}')
+        if paused and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if resume_btn.collidepoint(event.pos):
+                paused = False
+            elif quit_btn.collidepoint(event.pos):
+                running = False
+
+    if paused:
+        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 150))
+        screen.blit(overlay, (0, 0))
+
+        title = font_big.render("PAUZA", True, (245, 238, 220))
+        screen.blit(title, (WIDTH//2 - title.get_width()//2, HEIGHT//2 - 90))
+
+        pygame.draw.rect(screen, (80, 135, 70), resume_btn, border_radius=6)
+        pygame.draw.rect(screen, (130, 65, 60), quit_btn, border_radius=6)
+        pygame.draw.rect(screen, (245, 238, 220), resume_btn, width=2, border_radius=6)
+        pygame.draw.rect(screen, (245, 238, 220), quit_btn, width=2, border_radius=6)
+
+        resume_txt = font_menu.render("Wznow", True, (255, 250, 235))
+        quit_txt = font_menu.render("Wyjdz", True, (255, 250, 235))
+        screen.blit(resume_txt, (resume_btn.centerx - resume_txt.get_width()//2,
+                                 resume_btn.centery - resume_txt.get_height()//2))
+        screen.blit(quit_txt, (quit_btn.centerx - quit_txt.get_width()//2,
+                               quit_btn.centery - quit_txt.get_height()//2))
+
+        hint = font.render("ESC/Start - wznow    Q/B - wyjdz", True, (225, 218, 200))
+        screen.blit(hint, (WIDTH//2 - hint.get_width()//2, quit_btn.bottom + 18))
+        pygame.display.flip()
+        clock.tick(30)
+        continue
 
     keys = pygame.key.get_pressed()
+    hat_x = hat_y = 0
+    if joystick and joystick.get_numhats() > 0:
+        hat_x, hat_y = joystick.get_hat(0)
 
-    # Ruch gracza
     nr = pygame.Rect(player_pos[0], player_pos[1], player_size, player_size)
     if keys[pygame.K_w]: nr.y -= speed
     if keys[pygame.K_s]: nr.y += speed
     if keys[pygame.K_a]: nr.x -= speed
     if keys[pygame.K_d]: nr.x += speed
+    pad_x = joy_axis(joystick, 0)
+    pad_y = joy_axis(joystick, 1)
+    if hat_x:
+        pad_x = float(hat_x)
+    if hat_y:
+        pad_y = float(-hat_y)
+    nr.x += int(round(speed * pad_x))
+    nr.y += int(round(speed * pad_y))
     nr.left   = max(nr.left,   BORDER)
     nr.right  = min(nr.right,  WIDTH -BORDER)
     nr.top    = max(nr.top,    BORDER)
@@ -401,17 +544,27 @@ while running:
     if player_invuln > 0:
         player_invuln -= 1
 
-    # Amunicja
     if ammo_rect and player_rect.colliderect(ammo_rect):
         has_ammo = True; ammo_rect = None
 
-    # Strzały gracza
     if has_ammo:
         cx, cy = player_pos[0]+16, player_pos[1]+16
         if keys[pygame.K_UP]:    player_bullets.append([cx, cy,  0.0, -7.0])
         if keys[pygame.K_DOWN]:  player_bullets.append([cx, cy,  0.0,  7.0])
         if keys[pygame.K_LEFT]:  player_bullets.append([cx, cy, -7.0,  0.0])
         if keys[pygame.K_RIGHT]: player_bullets.append([cx, cy,  7.0,  0.0])
+        aim_x = joy_axis(joystick, 2)
+        aim_y = joy_axis(joystick, 3)
+        if abs(aim_x) > abs(aim_y):
+            if aim_x > 0: player_bullets.append([cx, cy,  7.0,  0.0])
+            if aim_x < 0: player_bullets.append([cx, cy, -7.0,  0.0])
+        elif abs(aim_y) > 0:
+            if aim_y > 0: player_bullets.append([cx, cy,  0.0,  7.0])
+            if aim_y < 0: player_bullets.append([cx, cy,  0.0, -7.0])
+        if joy_button(joystick, 3): player_bullets.append([cx, cy,  0.0, -7.0])
+        if joy_button(joystick, 0): player_bullets.append([cx, cy,  0.0,  7.0])
+        if joy_button(joystick, 2): player_bullets.append([cx, cy, -7.0,  0.0])
+        if joy_button(joystick, 1): player_bullets.append([cx, cy,  7.0,  0.0])
 
     obs_rects = [o[0] for o in obstacles]
     player_bullets = [
@@ -421,7 +574,6 @@ while running:
         and not any(pygame.Rect(int(b[0])-4,int(b[1])-4,8,8).colliderect(o) for o in obs_rects)
     ]
 
-    # Pociski wrogów
     new_eb = []
     for eb in enemy_bullets:
         eb.update()
@@ -432,7 +584,6 @@ while running:
             player_invuln = IFRAME_DURATION
     enemy_bullets = new_eb
 
-    # Wrogowie
     new_enemies = []
     for e in enemies:
         e.update(player_pos, obs_rects, enemy_bullets)
@@ -445,20 +596,17 @@ while running:
             player_invuln = IFRAME_DURATION
     enemies = new_enemies
 
-    # Drzwi
     if not enemies and door_rect is None:
         door_rect = pygame.Rect(WIDTH-66, HEIGHT//2-22, 40, 44)
     if door_rect and player_rect.colliderect(door_rect):
-        if ai_mode: load_ai_level()
+        if ai_mode: load_next_ai_level()
         else:       generate_map()
 
-    # Śmierć
     if player_hp <= 0:
-        if ai_mode: load_ai_level()
-        else:       generate_map()
         level = 0; player_hp = 3
+        if ai_mode: load_next_ai_level()
+        else:       generate_map()
 
-    # ═══ RYSOWANIE ═══════════════════════════════════════════════════════════
     draw_grass()
     draw_fence()
 
@@ -476,16 +624,13 @@ while running:
     for eb in enemy_bullets:
         eb.draw(screen)
 
-    # Gracz (miga gdy nietykalny)
     if not (player_invuln > 0 and (player_invuln % 8) < 4):
         screen.blit(spr["player"], (player_pos[0], player_pos[1]))
 
     for b in player_bullets:
         screen.blit(spr["bullet"], (int(b[0])-4, int(b[1])-4))
 
-    # ── UI ───────────────────────────────────────────────────────────────────
-    hp_str = "HP: " + "♥ " * player_hp + "♡ " * max(0, 3-player_hp)
-    screen.blit(font.render(hp_str, True, (220,60,80)), (BORDER+5, BORDER+5))
+    draw_health_ui(player_hp)
 
     lvl_s = font.render(f"Poziom: {level}", True, (60,40,10))
     screen.blit(lvl_s, (WIDTH//2 - lvl_s.get_width()//2, BORDER+5))
@@ -498,7 +643,6 @@ while running:
         warn = font.render("⚠ Następny poziom: BOSS!", True, (200,30,30))
         screen.blit(warn, (WIDTH//2 - warn.get_width()//2, BORDER+22))
 
-    # Pasek HP bossa
     boss = next((e for e in enemies if e.KIND == "boss"), None)
     if boss:
         BAR_W, BAR_H = 300, 18

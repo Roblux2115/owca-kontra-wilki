@@ -1,30 +1,3 @@
-"""
-sheep_env.py – Środowisko Gymnasium do uczenia agenta projektowania poziomów
-=============================================================================
-Instalacja:
-    pip install gymnasium numpy pygame
-
-Użycie:
-    from sheep_env import SheepLevelEnv
-
-    # Trening (bez okna)
-    env = SheepLevelEnv(render_mode=None)
-
-    # Podgląd na żywo
-    env = SheepLevelEnv(render_mode="human")
-
-    obs, info = env.reset()
-    obs, reward, terminated, truncated, info = env.step(action)
-
-Idea projektowania:
-    - Mapa podzielona na siatkę GRID_COLS × GRID_ROWS komórek
-    - Agent w każdym kroku wybiera jedną z 781 akcji:
-        [0 .. 259]   → postaw drzewo (przeszkodę) w komórce i
-        [260 .. 519] → postaw wroga w komórce i
-        [520 .. 779] → postaw amunicję w komórce i
-        [780]        → zakończ projektowanie
-    - Nagroda końcowa zależy od jakości poziomu (BFS, wrogowie, amunicja, rozmieszczenie)
-"""
 
 import math
 import random
@@ -38,7 +11,6 @@ try:
 except ImportError:
     PYGAME_AVAILABLE = False
 
-# ─── PARAMETRY SIATKI ────────────────────────────────────────────────────────
 MAP_W, MAP_H  = 600, 400
 BORDER        = 22
 GRID_COLS     = 20
@@ -50,34 +22,31 @@ N_CELLS       = GRID_COLS * GRID_ROWS               # 260
 MAX_STEPS     = 35
 MAX_OBSTACLES = 12
 MAX_ENEMIES   = 6
-MAX_AMMO      = 1    # dokładnie 1 kłębek wełny na mapie
+MAX_AMMO      = 1
 
-# Indeks komórki: idx = col + row * GRID_COLS
 def idx_to_colrow(idx: int):
     return idx % GRID_COLS, idx // GRID_COLS
 
 def colrow_to_idx(col: int, row: int) -> int:
     return col + row * GRID_COLS
 
-# Komórki chronione (spawn gracza i wyjście)
 SPAWN_CELL  = colrow_to_idx(0, 0)
 EXIT_CELLS  = {
     colrow_to_idx(GRID_COLS - 1, r)
     for r in range(GRID_ROWS // 2 - 1, GRID_ROWS // 2 + 2)
 }
 PROTECTED_CELLS = {SPAWN_CELL} | EXIT_CELLS
+BOSS_AMMO_CELLS = {
+    colrow_to_idx(c, r)
+    for c in range(3, 8)
+    for r in range(1, 6)
+}
 
-# Kanały obserwacji
 CH_OBSTACLE, CH_ENEMY, CH_SPAWN, CH_EXIT, CH_AMMO = 0, 1, 2, 3, 4
 N_CHANNELS = 5
 
-
-# ─── BFS – sprawdzenie przejezdności ─────────────────────────────────────────
 def bfs_path_length(obstacle_cells: set) -> int:
-    """
-    BFS od (col=0, row=0) do prawego środka mapy.
-    Zwraca długość najkrótszej ścieżki lub -1 jeśli nieprzejezdna.
-    """
+
     goal_c = GRID_COLS - 1
     goals  = {
         (goal_c, GRID_ROWS // 2 - 1),
@@ -101,33 +70,17 @@ def bfs_path_length(obstacle_cells: set) -> int:
     return -1
 
 
-# ─── ŚRODOWISKO ──────────────────────────────────────────────────────────────
 class SheepLevelEnv(gym.Env):
-    """
-    Przestrzeń obserwacji:
-        Box(0, 1, shape=(N_CHANNELS=5, GRID_ROWS=13, GRID_COLS=20), float32)
-        Kanał 0 – przeszkody (drzewa)
-        Kanał 1 – wrogowie (wilki)
-        Kanał 2 – spawn gracza
-        Kanał 3 – wyjście (brama)
-        Kanał 4 – amunicja (kłębek wełny)
-
-    Przestrzeń akcji:
-        Discrete(3 * N_CELLS + 1 = 781)
-        0   … 259  → postaw drzewo w komórce i
-        260 … 519  → postaw wroga  w komórce i - N_CELLS
-        520 … 779  → postaw amunicję w komórce i - 2*N_CELLS
-        780        → zakończ (done)
-    """
-
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
 
-    def __init__(self, render_mode=None):
+    def __init__(self, render_mode=None, mode="normal"):
         super().__init__()
         self.render_mode = render_mode
+        if mode not in ("normal", "boss"):
+            raise ValueError("mode must be 'normal' or 'boss'")
+        self.mode = mode
 
         self.action_space = spaces.Discrete(3 * N_CELLS + 1)
-        # 1D wektor – MlpPolicy nie wymaga 3D tensora, brak warningow
         self.observation_space = spaces.Box(
             low=0.0, high=1.0,
             shape=(N_CHANNELS * GRID_ROWS * GRID_COLS,),   # 5*13*20 = 1300
@@ -145,7 +98,6 @@ class SheepLevelEnv(gym.Env):
         if render_mode == "human" and not PYGAME_AVAILABLE:
             raise RuntimeError("Zainstaluj pygame: pip install pygame")
 
-    # ── Obserwacja ───────────────────────────────────────────────────────────
     def _get_obs(self) -> np.ndarray:
         obs = np.zeros((N_CHANNELS, GRID_ROWS, GRID_COLS), dtype=np.float32)
         for idx in self._obstacle_cells:
@@ -174,7 +126,6 @@ class SheepLevelEnv(gym.Env):
             "steps":     self._steps,
         }
 
-    # ── Reset ────────────────────────────────────────────────────────────────
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self._obstacle_cells = set()
@@ -183,7 +134,6 @@ class SheepLevelEnv(gym.Env):
         self._steps          = 0
         return self._get_obs(), self._get_info()
 
-    # ── Step ─────────────────────────────────────────────────────────────────
     def step(self, action: int):
         self._steps += 1
         action      = int(action)
@@ -195,7 +145,7 @@ class SheepLevelEnv(gym.Env):
             terminated = True
             reward     = self._compute_final_reward()
 
-        elif action < N_CELLS:                   # postaw drzewo
+        elif action < N_CELLS:
             if (action not in PROTECTED_CELLS
                     and action not in self._obstacle_cells
                     and action not in self._enemy_cells
@@ -208,7 +158,8 @@ class SheepLevelEnv(gym.Env):
 
         elif action < 2 * N_CELLS:               # postaw wroga
             enemy_idx = action - N_CELLS
-            if (enemy_idx not in PROTECTED_CELLS
+            if (self.mode != "boss"
+                    and enemy_idx not in PROTECTED_CELLS
                     and enemy_idx not in self._obstacle_cells
                     and enemy_idx not in self._enemy_cells
                     and enemy_idx != self._ammo_cell
@@ -221,6 +172,7 @@ class SheepLevelEnv(gym.Env):
         else:                                    # postaw amunicję
             ammo_idx = action - 2 * N_CELLS
             if (ammo_idx not in PROTECTED_CELLS
+                    and (self.mode != "boss" or ammo_idx in BOSS_AMMO_CELLS)
                     and ammo_idx not in self._obstacle_cells
                     and ammo_idx not in self._enemy_cells
                     and self._ammo_cell == -1):   # tylko 1 kłębek
@@ -237,21 +189,10 @@ class SheepLevelEnv(gym.Env):
 
         return obs, reward, terminated, False, info
 
-    # ── Nagroda końcowa ──────────────────────────────────────────────────────
     def _compute_final_reward(self) -> float:
-        """
-        Składowe nagrody:
-          BFS przejezdność        → max +10 (proporcjonalnie do długości ścieżki)
-          Brak ścieżki            → -20 (kara krytyczna)
-          Liczba wrogów           → +5 za optymum (3-4), -2 za brak
-          Liczba przeszkód        → +3 za optymum (5-8), -2 za brak
-          Drzewo blisko spawnu    → -1 za każde w promieniu 2
-          Wróg blisko spawnu      → -2 za każdego w promieniu 3.5
-          Amunicja obecna         → +3
-          Amunicja za blisko      → -2 (promień <= 3 od spawnu)
-          Amunicja za daleko      → -2 (promień >= 14 od spawnu)
-          Brak amunicji           → -3
-        """
+        if self.mode == "boss":
+            return self._compute_boss_reward()
+
         path_len = bfs_path_length(self._obstacle_cells)
 
         # Krytyczna kara – mapa nieprzejezdna
@@ -317,14 +258,65 @@ class SheepLevelEnv(gym.Env):
             if 4.0 <= dist_spawn <= 12.0:
                 reward += 1.0
 
-            # Kara jeśli amunicja leży NA przeszkodzie lub wrogu
+            # Kara jeśli amunicja leży na przeszkodzie lub wrogu
             if (self._ammo_cell in self._obstacle_cells
                     or self._ammo_cell in self._enemy_cells):
                 reward -= 2.0
 
         return round(reward, 3)
 
-    # ── Render ───────────────────────────────────────────────────────────────
+    def _compute_boss_reward(self) -> float:
+        path_len = bfs_path_length(self._obstacle_cells)
+        if path_len == -1:
+            return -20.0
+
+        reward = 0.0
+        boss_c, boss_r = GRID_COLS - 4, GRID_ROWS // 2
+
+        n_o = len(self._obstacle_cells)
+        if 3 <= n_o <= 7:
+            reward += 5.0
+        elif 1 <= n_o <= 10:
+            reward += 2.0
+        else:
+            reward -= 2.0
+
+        for idx in self._obstacle_cells:
+            c, r = idx_to_colrow(idx)
+            dist_spawn = math.sqrt(c**2 + r**2)
+            dist_boss = math.sqrt((c - boss_c)**2 + (r - boss_r)**2)
+            if dist_spawn <= 3.0:
+                reward -= 2.0
+            if dist_boss <= 2.5:
+                reward -= 2.0
+            if 4.0 <= dist_boss <= 7.0:
+                reward += 0.4
+
+        if self._ammo_cell < 0:
+            reward -= 8.0
+        else:
+            reward += 6.0
+            ac, ar = idx_to_colrow(self._ammo_cell)
+            dist_spawn = math.sqrt(ac**2 + ar**2)
+            dist_boss = math.sqrt((ac - boss_c)**2 + (ar - boss_r)**2)
+
+            if self._ammo_cell in BOSS_AMMO_CELLS:
+                reward += 6.0
+            else:
+                reward -= 6.0
+
+            if dist_boss <= 3.0:
+                reward -= 3.0
+            elif 6.0 <= dist_boss <= 12.0:
+                reward += 2.0
+
+        if self._enemy_cells:
+            reward -= 3.0 * len(self._enemy_cells)
+
+        # Lekki bonus za przejrzysta arene.
+        reward += min(path_len, GRID_COLS + GRID_ROWS) / 6.0
+        return round(reward, 3)
+
     def render(self):
         if self.render_mode == "human":
             self._render_frame()
@@ -356,15 +348,15 @@ class SheepLevelEnv(gym.Env):
             y = BORDER + r * CELL_H
             pygame.draw.line(surf, (75, 150, 40), (BORDER, y), (MAP_W - BORDER, y))
 
-        # Płot – ramka
+        # Płot
         pygame.draw.rect(surf, (155, 95, 35), (0, 0, MAP_W, MAP_H), BORDER)
 
-        # Strefa spawnu (niebieskawa)
+        # Strefa spawnu
         spawn_rect = pygame.Rect(BORDER, BORDER, CELL_W * 2, CELL_H * 2)
         pygame.draw.rect(surf, (100, 160, 240), spawn_rect, border_radius=3)
         pygame.draw.rect(surf, (60, 100, 200),  spawn_rect, width=2, border_radius=3)
 
-        # Strefa exit (złota)
+        # Strefa exit
         for idx in EXIT_CELLS:
             c, r = idx_to_colrow(idx)
             er = pygame.Rect(BORDER + c*CELL_W + 1, BORDER + r*CELL_H + 1,
@@ -388,7 +380,7 @@ class SheepLevelEnv(gym.Env):
             pygame.draw.circle(surf, (200, 40, 40), (cx, cy), rad)
             pygame.draw.circle(surf, (140, 10, 10), (cx, cy), rad, 1)
 
-        # Amunicja (różowy owal)
+        # Amunicja
         if self._ammo_cell >= 0:
             c, r = idx_to_colrow(self._ammo_cell)
             ammo_r = pygame.Rect(BORDER + c*CELL_W + 3, BORDER + r*CELL_H + 3,
@@ -396,11 +388,11 @@ class SheepLevelEnv(gym.Env):
             pygame.draw.ellipse(surf, (235, 170, 210), ammo_r)
             pygame.draw.ellipse(surf, (170,  90, 150), ammo_r, 1)
 
-        # UI
         font = pygame.font.SysFont(None, 22)
         ammo_txt = "tak" if self._ammo_cell >= 0 else "brak"
         surf.blit(font.render(
             f"Krok {self._steps}/{MAX_STEPS}   "
+            f"Tryb: {self.mode}   "
             f"Drzewa: {len(self._obstacle_cells)}/{MAX_OBSTACLES}   "
             f"Wrogowie: {len(self._enemy_cells)}/{MAX_ENEMIES}   "
             f"Amunicja: {ammo_txt}",
@@ -421,13 +413,11 @@ class SheepLevelEnv(gym.Env):
             self._screen = None
 
 
-# ─── SZYBKI TEST ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     print("=== Test SheepLevelEnv ===\n")
 
     env = SheepLevelEnv(render_mode=None)
 
-    # Walidacja Gymnasium API
     from gymnasium.utils.env_checker import check_env
     check_env(env, warn=True)
     print("check_env: OK\n")
@@ -451,23 +441,3 @@ if __name__ == "__main__":
 
     env.close()
     print("\nŚrodowisko działa poprawnie!")
-    print("\n── Przykład użycia ze Stable Baselines3 ──")
-    print("""
-from stable_baselines3 import PPO
-from sheep_env import SheepLevelEnv
-
-env   = SheepLevelEnv(render_mode=None)
-model = PPO("MlpPolicy", env, verbose=1)
-model.learn(total_timesteps=100_000)
-model.save("sheep_ppo")
-
-# Podgląd wyuczonego agenta
-env_vis = SheepLevelEnv(render_mode="human")
-obs, _  = env_vis.reset()
-for _ in range(MAX_STEPS):
-    action, _ = model.predict(obs, deterministic=True)
-    obs, r, done, _, _ = env_vis.step(action)
-    if done:
-        break
-env_vis.close()
-    """)

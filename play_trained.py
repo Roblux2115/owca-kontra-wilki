@@ -1,20 +1,3 @@
-"""
-play_trained.py – Podgląd wyuczonego agenta projektującego poziomy
-===================================================================
-Uruchomienie (po treningu):
-    python play_trained.py
-
-Co zobaczysz:
-    - Okno pygame 600×400
-    - Agent krok po kroku stawia drzewa (zielone) i wrogów (czerwone)
-    - Po zakończeniu projektowania widzisz gotowy poziom przez 2 sekundy
-    - Następnie agent projektuje kolejny poziom
-    - Naciśnij Q lub zamknij okno żeby wyjść
-
-Opcjonalnie możesz wczytać poziom do gry:
-    Skrypt zapisuje ostatni poziom jako last_level.json
-    (możesz go wczytać w main.py – patrz komentarz na dole)
-"""
 
 import time
 import json
@@ -24,6 +7,7 @@ import pygame
 from stable_baselines3 import PPO
 from sheep_env import (SheepLevelEnv, idx_to_colrow, N_CELLS, MAX_STEPS,
                        bfs_path_length, GRID_COLS, GRID_ROWS)
+from state_client import StateReporter
 
 
 SAVE_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -136,15 +120,20 @@ def _print_reward_breakdown(env):
 
 
 def run():
+    reporter = StateReporter("normal_generator")
+    reporter.update(status="starting", model_path=MODEL_PATH + ".zip")
+
     # Wczytaj model
     if not os.path.exists(MODEL_PATH + ".zip"):
         print(f"Nie znaleziono modelu: {MODEL_PATH}.zip")
         print("Najpierw uruchom: python train.py")
+        reporter.update(status="missing_model")
         return
 
     print("Wczytywanie modelu...")
     model = PPO.load(MODEL_PATH)
     print("OK\n")
+    reporter.update(status="generating")
 
     pygame.init()
     env = SheepLevelEnv(render_mode="human")
@@ -194,6 +183,14 @@ def run():
                       f"wrogowie={info['enemies']}  "
                       f"amunicja={info.get('ammo',0)}  "
                       f"nagroda={total_r:.2f}")
+                reporter.update(
+                    status="generating",
+                    episode=episode,
+                    last_reward=round(total_r, 3),
+                    obstacles=info["obstacles"],
+                    enemies=info["enemies"],
+                    ammo=info.get("ammo", 0),
+                )
                 _print_reward_breakdown(env)
                 print()
 
@@ -211,8 +208,10 @@ def run():
                     with open(JSON_PATH, "w") as f:
                         json.dump(all_levels, f, indent=2)
                     print(f"  ✓ Poziom {len(all_levels)} zapisany (nagroda={total_r:.2f}) → ai_levels.json")
+                    reporter.event("level_saved", reward=round(total_r, 3), saved_levels=len(all_levels))
                 else:
                     print(f"  ✗ Poziom odrzucony (nagroda={total_r:.2f} < {MIN_REWARD})")
+                    reporter.event("level_rejected", reward=round(total_r, 3), min_reward=MIN_REWARD)
 
                 # Pauza żeby zobaczyć gotowy poziom
                 pause_start = time.time()
@@ -226,25 +225,9 @@ def run():
                 break
 
     env.close()
+    reporter.update(status="stopped", episodes=episode)
     print("Zamknięto.")
 
 
 if __name__ == "__main__":
     run()
-
-# ─── JAK WCZYTAĆ POZIOM DO MAIN.PY ──────────────────────────────────────────
-# W main.py dodaj na początku:
-#
-#   import json, os
-#   LEVEL_FILE = os.path.join(os.path.dirname(__file__), "last_level.json")
-#
-# Zamiast generate_map() możesz wczytać poziom:
-#
-#   def load_level_from_json():
-#       global obstacles, enemies
-#       with open(LEVEL_FILE) as f:
-#           data = json.load(f)
-#       obstacles = [(pygame.Rect(o["x"],o["y"],o["w"],o["h"]),
-#                     random.choice(TREE_SPRITES))
-#                    for o in data["obstacles"]]
-#       enemies = [[e["x"], e["y"]] for e in data["enemies"]]
